@@ -7,7 +7,7 @@ import { Card } from './components/Card';
 import { Timer } from './components/Timer';
 
 // Connect to backend
-const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`;
+const API_URL = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3001' : 'https://spyfall-server-xan1.onrender.com');
 const socket = io(API_URL);
 
 function App() {
