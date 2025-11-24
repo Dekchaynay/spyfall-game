@@ -6,9 +6,15 @@ const { locations } = require('./gameData');
 
 const app = express();
 // Allow CORS from the client URL (deployed) or localhost (dev)
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+let CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+// Strip trailing slash if present
+if (CLIENT_URL.endsWith('/')) {
+    CLIENT_URL = CLIENT_URL.slice(0, -1);
+}
+const allowedOrigins = [CLIENT_URL, "http://localhost:5173", "http://127.0.0.1:5173"];
+
 app.use(cors({
-    origin: [CLIENT_URL, "http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
 }));
@@ -16,7 +22,7 @@ app.use(cors({
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: [CLIENT_URL, "http://localhost:5173", "http://127.0.0.1:5173"],
+        origin: allowedOrigins,
         methods: ["GET", "POST"],
         credentials: true
     }

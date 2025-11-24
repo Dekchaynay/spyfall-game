@@ -19,7 +19,26 @@ function App() {
   const [gameData, setGameData] = useState(null);
   const [error, setError] = useState('');
 
+  const [isConnected, setIsConnected] = useState(socket.connected);
+
   useEffect(() => {
+    function onConnect() {
+      setIsConnected(true);
+      setError('');
+    }
+
+    function onDisconnect() {
+      setIsConnected(false);
+      setError('Connection lost. Reconnecting...');
+    }
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    socket.on('connect_error', (err) => {
+      console.error("Connection error:", err);
+      setError(`Connection error: ${err.message}`);
+    });
+
     socket.on('room_joined', (data) => {
       setRoomId(data.roomId);
       setPlayers(data.players);
@@ -42,6 +61,9 @@ function App() {
     });
 
     return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('connect_error');
       socket.off('room_joined');
       socket.off('player_update');
       socket.off('game_started');
@@ -87,6 +109,11 @@ function App() {
               <div className="text-center mb-8">
                 <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-orange-500 mb-2">SPYFALL</h1>
                 <p className="text-slate-400">จับผิดสายลับ หรือ เนียนให้รอด</p>
+                {!isConnected && (
+                  <div className="text-xs text-rose-500 animate-pulse mt-2">
+                    Connecting to server... ({API_URL})
+                  </div>
+                )}
               </div>
 
               <Card className="space-y-4">

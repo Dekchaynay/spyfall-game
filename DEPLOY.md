@@ -10,35 +10,35 @@ This guide will help you deploy your Spyfall game so you can play with friends o
 
 ## Part 1: Deploy Backend (Server) to Render
 
-1.  Push your code to **GitHub** (if you haven't already).
+1.  **Code is already on GitHub!**
+    - Repo: [https://github.com/Dekchaynay/spyfall-game](https://github.com/Dekchaynay/spyfall-game)
 2.  Go to [dashboard.render.com](https://dashboard.render.com/) and sign up/login.
 3.  Click **"New +"** -> **"Web Service"**.
-4.  Connect your GitHub repository.
+4.  Connect your GitHub repository (`spyfall-game`).
 5.  **Configure the service**:
-    - **Name**: `spyfall-server` (or anything you like)
+    - **Name**: `spyfall-server`
     - **Root Directory**: `server` (Important!)
     - **Runtime**: `Node`
     - **Build Command**: `npm install`
     - **Start Command**: `node index.js`
     - **Instance Type**: Free
 6.  Click **"Create Web Service"**.
-7.  Wait for it to deploy. Once finished, copy the **URL** (e.g., `https://spyfall-server.onrender.com`). You will need this for the frontend.
+7.  Wait for it to deploy. Once finished, copy the **URL** (e.g., `https://spyfall-server.onrender.com`).
 
 ---
 
-## Part 2: Deploy Frontend (Client) to Vercel
+## Part 2: Frontend (Client) is Deployed!
 
-1.  Go to [vercel.com](https://vercel.com/) and sign up/login.
-2.  Click **"Add New..."** -> **"Project"**.
-3.  Import your GitHub repository.
-4.  **Configure the project**:
-    - **Framework Preset**: Vite (should be auto-detected)
-    - **Root Directory**: Click "Edit" and select `client`.
-    - **Environment Variables**:
-        - Key: `VITE_API_URL`
-        - Value: The **Render URL** you copied in Part 1 (e.g., `https://spyfall-server.onrender.com`).
-5.  Click **"Deploy"**.
-6.  Wait for it to finish. You will get a domain (e.g., `spyfall-game.vercel.app`).
+I have already deployed the client for you.
+- **URL**: [https://client-g7gtc3yd7-nanays-projects.vercel.app](https://client-g7gtc3yd7-nanays-projects.vercel.app)
+- *(Note: You can also find this in your Vercel dashboard)*
+
+**IMPORTANT**: You need to update the Vercel deployment with the Render URL.
+1.  Go to your Vercel Project Settings.
+2.  **Environment Variables**:
+    - Key: `VITE_API_URL`
+    - Value: The **Render URL** from Part 1.
+3.  **Redeploy** (Go to Deployments -> Redeploy) for the change to take effect.
 
 ---
 
@@ -48,8 +48,7 @@ This guide will help you deploy your Spyfall game so you can play with friends o
 2.  Go to the **"Environment"** tab of your `spyfall-server`.
 3.  Add a new Environment Variable:
     - **Key**: `CLIENT_URL`
-    - **Value**: Your **Vercel URL** (e.g., `https://spyfall-game.vercel.app`).
-    - *Note: Remove any trailing slash `/` from the URL.*
+    - **Value**: `https://client-g7gtc3yd7-nanays-projects.vercel.app` (or your custom domain).
 4.  Render will automatically restart the server.
 
-**Done!** You can now open your Vercel URL and play with friends.
+**Done!** Open the Vercel URL to play.
