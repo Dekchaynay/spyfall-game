@@ -7,7 +7,15 @@ import { Card } from './components/Card';
 import { Timer } from './components/Timer';
 
 // Connect to backend
-const API_URL = import.meta.env.VITE_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:3001' : 'https://spyfall-server-xan1.onrender.com');
+// Connect to backend
+const isLocalNetwork = window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname.startsWith('192.168.') ||
+  window.location.hostname.startsWith('10.');
+
+const API_URL = import.meta.env.VITE_API_URL || (isLocalNetwork
+  ? `http://${window.location.hostname}:3001`
+  : 'https://spyfall-server-xan1.onrender.com');
 const socket = io(API_URL);
 
 function App() {
