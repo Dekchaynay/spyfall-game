@@ -62,10 +62,15 @@ io.on('connection', (socket) => {
             id: roomId,
             players: [{ id: socket.id, name: playerName, isHost: true }],
             status: 'waiting',
-            gameLength: 5 // minutes
+            gameLength: 5, // minutes
+            location: null,
+            startTime: null,
+            votes: {}, // voterId -> suspectId
+            spyId: null,
+            timer: null
         });
         socket.join(roomId);
-        socket.emit('room_joined', { roomId, players: rooms.get(roomId).players, isHost: true });
+        socket.emit('room_joined', { roomId, players: rooms.get(roomId).players, isHost: true, gameLength: 5 });
         console.log(`Room ${roomId} created by ${playerName}`);
     });
 
@@ -84,8 +89,19 @@ io.on('connection', (socket) => {
         socket.join(roomId);
 
         io.to(roomId).emit('player_update', room.players);
-        socket.emit('room_joined', { roomId, players: room.players, isHost: false });
+        socket.emit('room_joined', { roomId, players: room.players, isHost: false, gameLength: room.gameLength });
         console.log(`${playerName} joined room ${roomId}`);
+    });
+
+    socket.on('update_game_settings', ({ roomId, gameLength }) => {
+        const room = rooms.get(roomId);
+        if (!room) return;
+        // Verify host
+        const player = room.players.find(p => p.id === socket.id);
+        if (!player || !player.isHost) return;
+
+        room.gameLength = gameLength;
+        io.to(roomId).emit('game_settings_updated', { gameLength });
     });
 
     socket.on('start_game', (roomId) => {
@@ -97,9 +113,12 @@ io.on('connection', (socket) => {
         room.location = location;
         room.status = 'playing';
         room.startTime = Date.now();
+        room.votes = {};
 
         // Pick random spy
         const spyIndex = Math.floor(Math.random() * room.players.length);
+        const spyPlayer = room.players[spyIndex];
+        room.spyId = spyPlayer.id;
 
         // Assign roles
         const roles = [...location.roles];
@@ -122,7 +141,65 @@ io.on('connection', (socket) => {
             });
         });
 
+        // Start server timer
+        if (room.timer) clearTimeout(room.timer);
+        room.timer = setTimeout(() => {
+            io.to(roomId).emit('start_voting');
+            room.status = 'voting';
+        }, room.gameLength * 60 * 1000);
+
         console.log(`Game started in room ${roomId}`);
+    });
+
+    socket.on('vote_player', ({ roomId, suspectId }) => {
+        const room = rooms.get(roomId);
+        if (!room || room.status !== 'voting') return;
+
+        room.votes[socket.id] = suspectId;
+
+        // Check if all players voted
+        if (Object.keys(room.votes).length === room.players.length) {
+            // Count votes
+            const voteCounts = {};
+            Object.values(room.votes).forEach(id => {
+                voteCounts[id] = (voteCounts[id] || 0) + 1;
+            });
+
+            // Find player with max votes
+            let maxVotes = 0;
+            let suspectId = null;
+            for (const [id, count] of Object.entries(voteCounts)) {
+                if (count > maxVotes) {
+                    maxVotes = count;
+                    suspectId = id;
+                }
+            }
+
+            // Simple majority logic: if suspect is Spy, Spy gets a chance to guess.
+            // If suspect is NOT Spy, Spy wins.
+            if (suspectId === room.spyId) {
+                io.to(roomId).emit('spy_guess_phase');
+                room.status = 'guessing';
+            } else {
+                io.to(roomId).emit('game_over', { winner: 'spy', reason: 'Citizens voted for the wrong person!' });
+                room.status = 'finished';
+            }
+        }
+    });
+
+    socket.on('spy_guess_location', ({ roomId, locationName }) => {
+        const room = rooms.get(roomId);
+        if (!room) return;
+
+        // Verify it's the spy guessing
+        if (socket.id !== room.spyId) return;
+
+        if (locationName === room.location.name) {
+            io.to(roomId).emit('game_over', { winner: 'spy', reason: 'Spy guessed the location correctly!' });
+        } else {
+            io.to(roomId).emit('game_over', { winner: 'citizens', reason: `Spy guessed wrong! Location was ${room.location.name}` });
+        }
+        room.status = 'finished';
     });
 
     socket.on('disconnect', () => {
@@ -133,6 +210,7 @@ io.on('connection', (socket) => {
             if (playerIndex !== -1) {
                 room.players.splice(playerIndex, 1);
                 if (room.players.length === 0) {
+                    if (room.timer) clearTimeout(room.timer);
                     rooms.delete(roomId);
                 } else {
                     io.to(roomId).emit('player_update', room.players);

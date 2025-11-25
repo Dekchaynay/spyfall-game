@@ -11,13 +11,18 @@ const API_URL = import.meta.env.VITE_API_URL || (window.location.hostname === 'l
 const socket = io(API_URL);
 
 function App() {
-  const [view, setView] = useState('home'); // home, lobby, game
+  const [view, setView] = useState('home'); // home, lobby, game, voting, guessing, finished
   const [playerName, setPlayerName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [players, setPlayers] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [gameData, setGameData] = useState(null);
+  const [gameLength, setGameLength] = useState(5);
   const [error, setError] = useState('');
+  const [winner, setWinner] = useState(null);
+  const [winReason, setWinReason] = useState('');
+  const [hasVoted, setHasVoted] = useState(false);
+  const [isSpyGuessing, setIsSpyGuessing] = useState(false); // Local state for spy toggling guess UI
 
   const [isConnected, setIsConnected] = useState(socket.connected);
 
@@ -43,17 +48,42 @@ function App() {
       setRoomId(data.roomId);
       setPlayers(data.players);
       setIsHost(data.isHost);
+      if (data.gameLength) setGameLength(data.gameLength);
       setView('lobby');
       setError('');
+      setWinner(null);
+      setWinReason('');
+      setHasVoted(false);
+      setIsSpyGuessing(false);
     });
 
     socket.on('player_update', (updatedPlayers) => {
       setPlayers(updatedPlayers);
     });
 
+    socket.on('game_settings_updated', (data) => {
+      setGameLength(data.gameLength);
+    });
+
     socket.on('game_started', (data) => {
       setGameData(data);
       setView('game');
+      setHasVoted(false);
+      setIsSpyGuessing(false);
+    });
+
+    socket.on('start_voting', () => {
+      setView('voting');
+    });
+
+    socket.on('spy_guess_phase', () => {
+      setView('guessing');
+    });
+
+    socket.on('game_over', ({ winner, reason }) => {
+      setWinner(winner);
+      setWinReason(reason);
+      setView('finished');
     });
 
     socket.on('error', (msg) => {
@@ -66,7 +96,11 @@ function App() {
       socket.off('connect_error');
       socket.off('room_joined');
       socket.off('player_update');
+      socket.off('game_settings_updated');
       socket.off('game_started');
+      socket.off('start_voting');
+      socket.off('spy_guess_phase');
+      socket.off('game_over');
       socket.off('error');
     };
   }, []);
@@ -81,8 +115,23 @@ function App() {
     socket.emit('join_room', { roomId, playerName });
   };
 
+  const updateGameLength = (length) => {
+    if (!isHost) return;
+    socket.emit('update_game_settings', { roomId, gameLength: length });
+  };
+
   const startGame = () => {
     socket.emit('start_game', roomId);
+  };
+
+  const votePlayer = (suspectId) => {
+    if (hasVoted) return;
+    socket.emit('vote_player', { roomId, suspectId });
+    setHasVoted(true);
+  };
+
+  const guessLocation = (locationName) => {
+    socket.emit('spy_guess_location', { roomId, locationName });
   };
 
   const leaveGame = () => {
@@ -90,7 +139,7 @@ function App() {
     setRoomId('');
     setPlayers([]);
     setGameData(null);
-    // Optional: emit leave event if needed, but disconnect handles it mostly
+    setWinner(null);
     window.location.reload();
   }
 
@@ -191,6 +240,25 @@ function App() {
                 </div>
               </Card>
 
+              <Card>
+                <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">เวลาเล่น (นาที)</h3>
+                <div className="flex gap-2 justify-center">
+                  {[3, 5, 8, 10].map(time => (
+                    <button
+                      key={time}
+                      onClick={() => updateGameLength(time)}
+                      disabled={!isHost}
+                      className={`w-12 h-12 rounded-lg font-bold transition-all ${gameLength === time
+                          ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-110'
+                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        } ${!isHost && 'cursor-default opacity-80'}`}
+                    >
+                      {time}
+                    </button>
+                  ))}
+                </div>
+              </Card>
+
               {isHost ? (
                 <Button onClick={startGame} className="w-full py-4 text-lg shadow-rose-500/25">
                   เริ่มเกม
@@ -214,41 +282,179 @@ function App() {
                 <Timer initialTime={gameData.gameLength} />
               </div>
 
-              <Card className="text-center py-8 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-rose-500 via-orange-500 to-rose-500"></div>
+              {!isSpyGuessing ? (
+                <>
+                  <Card className="text-center py-8 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-rose-500 via-orange-500 to-rose-500"></div>
 
-                <h2 className="text-slate-400 text-sm uppercase tracking-wider mb-2">บทบาทของคุณ</h2>
-                <div className="text-3xl font-bold text-white mb-6">
-                  {gameData.role}
-                </div>
-
-                <div className="w-full h-px bg-slate-700/50 my-6"></div>
-
-                <h2 className="text-slate-400 text-sm uppercase tracking-wider mb-2">สถานที่</h2>
-                <div className={`text-4xl font-black ${gameData.isSpy ? 'text-rose-500' : 'text-emerald-400'}`}>
-                  {gameData.location}
-                </div>
-
-                {gameData.isSpy && (
-                  <p className="mt-4 text-sm text-slate-400">
-                    เนียนให้รอด! พยายามทายว่าสถานที่คือที่ไหน
-                  </p>
-                )}
-              </Card>
-
-              <Card>
-                <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">สถานที่ทั้งหมด</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  {gameData.allLocations.map((loc) => (
-                    <div key={loc} className={`p-2 rounded border ${gameData.location === loc && !gameData.isSpy ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>
-                      {loc}
+                    <h2 className="text-slate-400 text-sm uppercase tracking-wider mb-2">บทบาทของคุณ</h2>
+                    <div className="text-3xl font-bold text-white mb-6">
+                      {gameData.role}
                     </div>
-                  ))}
-                </div>
-              </Card>
+
+                    <div className="w-full h-px bg-slate-700/50 my-6"></div>
+
+                    <h2 className="text-slate-400 text-sm uppercase tracking-wider mb-2">สถานที่</h2>
+                    <div className={`text-4xl font-black ${gameData.isSpy ? 'text-rose-500' : 'text-emerald-400'}`}>
+                      {gameData.location}
+                    </div>
+
+                    {gameData.isSpy && (
+                      <div className="mt-6">
+                        <p className="text-sm text-slate-400 mb-4">
+                          เนียนให้รอด! พยายามทายว่าสถานที่คือที่ไหน
+                        </p>
+                        <Button
+                          onClick={() => setIsSpyGuessing(true)}
+                          className="w-full bg-rose-500 hover:bg-rose-600"
+                        >
+                          🕵️‍♂️ ทายสถานที่ (เสี่ยงดวง)
+                        </Button>
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card>
+                    <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">สถานที่ทั้งหมด</h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      {gameData.allLocations.map((loc) => (
+                        <div key={loc} className={`p-2 rounded border ${gameData.location === loc && !gameData.isSpy ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>
+                          {loc}
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                </>
+              ) : (
+                <Card>
+                  <h3 className="text-xl font-bold mb-4 text-rose-500">ทายสถานที่</h3>
+                  <p className="text-slate-400 mb-4 text-sm">ถ้าทายถูกชนะทันที ถ้าผิดแพ้ทันที!</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {gameData.allLocations.map((loc) => (
+                      <button
+                        key={loc}
+                        onClick={() => guessLocation(loc)}
+                        className="p-3 rounded bg-slate-800 hover:bg-rose-500/20 hover:border-rose-500 border border-slate-700 transition-colors text-left"
+                      >
+                        {loc}
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    onClick={() => setIsSpyGuessing(false)}
+                    variant="secondary"
+                    className="w-full mt-4"
+                  >
+                    ยกเลิก
+                  </Button>
+                </Card>
+              )}
 
               <Button onClick={leaveGame} variant="outline" className="w-full">
                 ออกจากเกม
+              </Button>
+            </motion.div>
+          )}
+
+          {view === 'voting' && (
+            <motion.div
+              key="voting"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-6"
+            >
+              <div className="text-center">
+                <h2 className="text-3xl font-bold text-rose-500 mb-2">หมดเวลา!</h2>
+                <p className="text-slate-400">โหวตหาคนที่เป็น Spy</p>
+              </div>
+
+              <Card>
+                {!hasVoted ? (
+                  <div className="space-y-2">
+                    {players.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => votePlayer(p.id)}
+                        className="w-full flex items-center gap-3 p-4 bg-slate-700/30 hover:bg-rose-500/20 hover:border-rose-500 rounded-lg border border-slate-700/50 transition-all"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center font-bold">
+                          {p.name[0].toUpperCase()}
+                        </div>
+                        <span className="font-medium text-lg">{p.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="text-4xl mb-4">🗳️</div>
+                    <h3 className="text-xl font-bold mb-2">โหวตเรียบร้อย</h3>
+                    <p className="text-slate-400 animate-pulse">รอผลโหวตจากคนอื่น...</p>
+                  </div>
+                )}
+              </Card>
+            </motion.div>
+          )}
+
+          {view === 'guessing' && (
+            <motion.div
+              key="guessing"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-6"
+            >
+              <div className="text-center">
+                <h2 className="text-3xl font-bold text-orange-500 mb-2">Spy ถูกจับได้!</h2>
+                <p className="text-slate-400">Spy มีโอกาสทายสถานที่ครั้งสุดท้าย</p>
+              </div>
+
+              {gameData?.isSpy ? (
+                <Card>
+                  <h3 className="text-xl font-bold mb-4 text-rose-500">เลือกสถานที่</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {gameData.allLocations.map((loc) => (
+                      <button
+                        key={loc}
+                        onClick={() => guessLocation(loc)}
+                        className="p-3 rounded bg-slate-800 hover:bg-rose-500/20 hover:border-rose-500 border border-slate-700 transition-colors text-left"
+                      >
+                        {loc}
+                      </button>
+                    ))}
+                  </div>
+                </Card>
+              ) : (
+                <Card className="text-center py-12">
+                  <div className="text-4xl mb-4">🕵️‍♂️</div>
+                  <p className="text-slate-400 animate-pulse">รอ Spy ทายสถานที่...</p>
+                </Card>
+              )}
+            </motion.div>
+          )}
+
+          {view === 'finished' && (
+            <motion.div
+              key="finished"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="space-y-6 text-center"
+            >
+              <div className="py-8">
+                <h2 className="text-6xl mb-4">
+                  {winner === 'spy' ? '🕵️‍♂️' : '👥'}
+                </h2>
+                <h1 className={`text-4xl font-black mb-2 ${winner === 'spy' ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {winner === 'spy' ? 'SPY ชนะ!' : 'ชาวบ้าน ชนะ!'}
+                </h1>
+                <p className="text-xl text-slate-300">{winReason}</p>
+              </div>
+
+              <Card className="bg-slate-800/50">
+                <p className="text-slate-400 mb-2">สถานที่คือ</p>
+                <p className="text-2xl font-bold text-white">{gameData?.location}</p>
+              </Card>
+
+              <Button onClick={leaveGame} className="w-full py-4 text-lg">
+                กลับสู่ล็อบบี้
               </Button>
             </motion.div>
           )}
