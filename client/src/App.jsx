@@ -7,7 +7,6 @@ import { Card } from './components/Card';
 import { Timer } from './components/Timer';
 
 // Connect to backend
-// Connect to backend
 const isLocalNetwork = window.location.hostname === 'localhost' ||
   window.location.hostname === '127.0.0.1' ||
   window.location.hostname.startsWith('192.168.') ||
@@ -31,6 +30,7 @@ function App() {
   const [winReason, setWinReason] = useState('');
   const [hasVoted, setHasVoted] = useState(false);
   const [isSpyGuessing, setIsSpyGuessing] = useState(false); // Local state for spy toggling guess UI
+  const [remainingTime, setRemainingTime] = useState(null);
 
   const [isConnected, setIsConnected] = useState(socket.connected);
 
@@ -57,7 +57,32 @@ function App() {
       setPlayers(data.players);
       setIsHost(data.isHost);
       if (data.gameLength) setGameLength(data.gameLength);
-      setView('lobby');
+
+      // Handle reconnection state
+      if (data.gameState) {
+        const { status, location, role, isSpy, startTime, gameLength: totalSeconds, allLocations } = data.gameState;
+        setGameData({
+          location,
+          role,
+          isSpy,
+          gameLength: totalSeconds,
+          allLocations
+        });
+
+        // Calculate remaining time for Timer
+        if (startTime) {
+          const elapsed = (Date.now() - startTime) / 1000;
+          const remaining = Math.max(0, totalSeconds - elapsed);
+          // We need to hack Timer to accept current remaining time?
+          // Or just pass it as initialTime.
+          setGameData(prev => ({ ...prev, gameLength: remaining }));
+        }
+
+        setView(status === 'playing' ? 'game' : status);
+      } else {
+        setView('lobby');
+      }
+
       setError('');
       setWinner(null);
       setWinReason('');
@@ -78,6 +103,7 @@ function App() {
       setView('game');
       setHasVoted(false);
       setIsSpyGuessing(false);
+      setRemainingTime(data.gameLength);
     });
 
     socket.on('start_voting', () => {
@@ -92,6 +118,15 @@ function App() {
       setWinner(winner);
       setWinReason(reason);
       setView('finished');
+    });
+
+    socket.on('room_reset', () => {
+      setView('lobby');
+      setGameData(null);
+      setWinner(null);
+      setWinReason('');
+      setHasVoted(false);
+      setIsSpyGuessing(false);
     });
 
     socket.on('error', (msg) => {
@@ -109,6 +144,7 @@ function App() {
       socket.off('start_voting');
       socket.off('spy_guess_phase');
       socket.off('game_over');
+      socket.off('room_reset');
       socket.off('error');
     };
   }, []);
@@ -142,6 +178,10 @@ function App() {
     socket.emit('spy_guess_location', { roomId, locationName });
   };
 
+  const resetGame = () => {
+    socket.emit('reset_game', roomId);
+  };
+
   const leaveGame = () => {
     setView('home');
     setRoomId('');
@@ -166,7 +206,7 @@ function App() {
               <div className="text-center mb-8">
                 <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-orange-500 mb-2">SPYFALL</h1>
                 <p className="text-slate-400">จับผิดสายลับ หรือ เนียนให้รอด</p>
-                <p className="text-xs text-slate-600 mt-2">v1.1 (Time Selection Update)</p>
+                <p className="text-xs text-slate-600 mt-2">v1.2 (Reconnection & Play Again)</p>
                 {!isConnected && (
                   <div className="text-xs text-rose-500 animate-pulse mt-2">
                     Connecting to server... ({API_URL})
@@ -238,11 +278,12 @@ function App() {
                 </h3>
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
                   {players.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg border border-slate-700/50">
+                    <div key={p.id} className={`flex items-center gap-3 p-3 rounded-lg border ${p.connected ? 'bg-slate-700/30 border-slate-700/50' : 'bg-slate-800/30 border-slate-800/50 opacity-50'}`}>
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-rose-500 to-orange-500 flex items-center justify-center font-bold text-sm">
                         {p.name[0].toUpperCase()}
                       </div>
                       <span className="font-medium">{p.name}</span>
+                      {!p.connected && <span className="text-xs text-rose-500">(หลุดการเชื่อมต่อ)</span>}
                       {p.isHost && <span className="ml-auto text-xs text-slate-400">หัวหน้าห้อง</span>}
                     </div>
                   ))}
@@ -288,7 +329,10 @@ function App() {
               className="space-y-6"
             >
               <div className="text-center">
-                <Timer initialTime={gameData.gameLength} />
+                <Timer
+                  initialTime={gameData.gameLength}
+                  onTick={(time) => setRemainingTime(time)}
+                />
               </div>
 
               {!isSpyGuessing ? (
@@ -315,9 +359,12 @@ function App() {
                         </p>
                         <Button
                           onClick={() => setIsSpyGuessing(true)}
-                          className="w-full bg-rose-500 hover:bg-rose-600"
+                          disabled={remainingTime > 60}
+                          className={`w-full ${remainingTime > 60 ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-rose-500 hover:bg-rose-600'}`}
                         >
-                          🕵️‍♂️ ทายสถานที่ (เสี่ยงดวง)
+                          {remainingTime > 60
+                            ? `ทายได้ในอีก ${Math.floor((remainingTime - 60) / 60)}:${String((remainingTime - 60) % 60).padStart(2, '0')}`
+                            : '🕵️‍♂️ ทายสถานที่ (เสี่ยงดวง)'}
                         </Button>
                       </div>
                     )}
@@ -384,12 +431,14 @@ function App() {
                       <button
                         key={p.id}
                         onClick={() => votePlayer(p.id)}
-                        className="w-full flex items-center gap-3 p-4 bg-slate-700/30 hover:bg-rose-500/20 hover:border-rose-500 rounded-lg border border-slate-700/50 transition-all"
+                        className={`w-full flex items-center gap-3 p-4 rounded-lg border transition-all ${p.connected ? 'bg-slate-700/30 hover:bg-rose-500/20 hover:border-rose-500 border-slate-700/50' : 'bg-slate-800/30 border-slate-800/50 opacity-50 cursor-not-allowed'}`}
+                        disabled={!p.connected}
                       >
                         <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center font-bold">
                           {p.name[0].toUpperCase()}
                         </div>
                         <span className="font-medium text-lg">{p.name}</span>
+                        {!p.connected && <span className="text-xs text-rose-500">(หลุด)</span>}
                       </button>
                     ))}
                   </div>
@@ -462,8 +511,18 @@ function App() {
                 <p className="text-2xl font-bold text-white">{gameData?.location}</p>
               </Card>
 
-              <Button onClick={leaveGame} className="w-full py-4 text-lg">
-                กลับสู่ล็อบบี้
+              {isHost ? (
+                <Button onClick={resetGame} className="w-full py-4 text-lg shadow-emerald-500/25 bg-emerald-500 hover:bg-emerald-600">
+                  เล่นอีกครั้ง
+                </Button>
+              ) : (
+                <div className="text-slate-400 animate-pulse">
+                  รอหัวหน้าห้องเริ่มเกมใหม่...
+                </div>
+              )}
+
+              <Button onClick={leaveGame} variant="outline" className="w-full mt-4">
+                ออกจากห้อง
               </Button>
             </motion.div>
           )}
