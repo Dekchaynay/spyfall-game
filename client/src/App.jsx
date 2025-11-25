@@ -158,6 +158,7 @@ function App() {
               <div className="text-center mb-8">
                 <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-orange-500 mb-2">SPYFALL</h1>
                 <p className="text-slate-400">จับผิดสายลับ หรือ เนียนให้รอด</p>
+                <p className="text-xs text-slate-600 mt-2">v1.1 (Time Selection Update)</p>
                 {!isConnected && (
                   <div className="text-xs text-rose-500 animate-pulse mt-2">
                     Connecting to server... ({API_URL})
@@ -249,8 +250,8 @@ function App() {
                       onClick={() => updateGameLength(time)}
                       disabled={!isHost}
                       className={`w-12 h-12 rounded-lg font-bold transition-all ${gameLength === time
-                          ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-110'
-                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/25 scale-110'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                         } ${!isHost && 'cursor-default opacity-80'}`}
                     >
                       {time}
