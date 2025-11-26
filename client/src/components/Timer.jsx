@@ -3,23 +3,30 @@ import React, { useEffect, useState } from 'react';
 export const Timer = ({ initialTime, onTick }) => {
     const [timeLeft, setTimeLeft] = useState(initialTime);
 
+    const onTickRef = React.useRef(onTick);
+
+    useEffect(() => {
+        onTickRef.current = onTick;
+    }, [onTick]);
+
     useEffect(() => {
         setTimeLeft(initialTime);
-    }, [initialTime]);
-
-    useEffect(() => {
-        if (timeLeft <= 0) return;
+        const endTime = Date.now() + initialTime * 1000;
 
         const intervalId = setInterval(() => {
-            setTimeLeft((prev) => {
-                const newTime = prev - 1;
-                if (onTick) onTick(newTime);
-                return newTime;
-            });
+            const now = Date.now();
+            const remaining = Math.max(0, Math.ceil((endTime - now) / 1000));
+
+            setTimeLeft(remaining);
+            if (onTickRef.current) onTickRef.current(remaining);
+
+            if (remaining <= 0) {
+                clearInterval(intervalId);
+            }
         }, 1000);
 
         return () => clearInterval(intervalId);
-    }, [timeLeft, onTick]);
+    }, [initialTime]);
 
     const minutes = Math.floor(timeLeft / 60);
     const seconds = timeLeft % 60;

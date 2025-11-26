@@ -18,9 +18,47 @@ const API_URL = import.meta.env.VITE_API_URL || (isLocalNetwork
 const socket = io(API_URL);
 
 function App() {
-  const [view, setView] = useState('home'); // home, lobby, game, voting, guessing, finished
+  const [view, setView] = useState('home'); // home, lobby, game, voting, guessing, finished, server_list
   const [playerName, setPlayerName] = useState('');
   const [roomId, setRoomId] = useState('');
+  const [isPublic, setIsPublic] = useState(false); // Default to Private
+  const [publicRooms, setPublicRooms] = useState([]);
+
+  // Refs for auto-rejoin logic (since event listeners close over state)
+  const playerNameRef = React.useRef(playerName);
+  const roomIdRef = React.useRef(roomId);
+
+  useEffect(() => {
+    playerNameRef.current = playerName;
+  }, [playerName]);
+
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
+
+  // Load session from localStorage on mount
+  useEffect(() => {
+    const savedRoomId = localStorage.getItem('spyfall_roomId');
+    const savedPlayerName = localStorage.getItem('spyfall_playerName');
+
+    if (savedRoomId && savedPlayerName) {
+      setRoomId(savedRoomId);
+      setPlayerName(savedPlayerName);
+      // We don't auto-emit here because the socket might not be connected yet.
+      // The onConnect handler will take care of it, OR if already connected:
+      if (socket.connected) {
+        socket.emit('join_room', { roomId: savedRoomId, playerName: savedPlayerName });
+      }
+    }
+  }, []);
+
+  // Save session to localStorage
+  useEffect(() => {
+    if (roomId && playerName) {
+      localStorage.setItem('spyfall_roomId', roomId);
+      localStorage.setItem('spyfall_playerName', playerName);
+    }
+  }, [roomId, playerName]);
   const [players, setPlayers] = useState([]);
   const [isHost, setIsHost] = useState(false);
   const [gameData, setGameData] = useState(null);
@@ -38,6 +76,13 @@ function App() {
     function onConnect() {
       setIsConnected(true);
       setError('');
+
+      // Auto-rejoin if we have state
+      // Use the ref values to ensure we have the latest
+      if (roomIdRef.current && playerNameRef.current) {
+        console.log("Auto-rejoining room...", roomIdRef.current);
+        socket.emit('join_room', { roomId: roomIdRef.current, playerName: playerNameRef.current });
+      }
     }
 
     function onDisconnect() {
@@ -57,26 +102,22 @@ function App() {
       setPlayers(data.players);
       setIsHost(data.isHost);
       if (data.gameLength) setGameLength(data.gameLength);
+      if (typeof data.isPublic === 'boolean') setIsPublic(data.isPublic);
 
       // Handle reconnection state
       if (data.gameState) {
-        const { status, location, role, isSpy, startTime, gameLength: totalSeconds, allLocations } = data.gameState;
+        const { status, location, role, isSpy, startTime, gameLength: totalSeconds, remainingTime, allLocations } = data.gameState;
+
+        // Use server-provided remaining time to avoid clock skew
+        const currentRemainingTime = remainingTime !== undefined ? remainingTime : totalSeconds;
+
         setGameData({
           location,
           role,
           isSpy,
-          gameLength: totalSeconds,
+          gameLength: currentRemainingTime,
           allLocations
         });
-
-        // Calculate remaining time for Timer
-        if (startTime) {
-          const elapsed = (Date.now() - startTime) / 1000;
-          const remaining = Math.max(0, totalSeconds - elapsed);
-          // We need to hack Timer to accept current remaining time?
-          // Or just pass it as initialTime.
-          setGameData(prev => ({ ...prev, gameLength: remaining }));
-        }
 
         setView(status === 'playing' ? 'game' : status);
       } else {
@@ -95,7 +136,8 @@ function App() {
     });
 
     socket.on('game_settings_updated', (data) => {
-      setGameLength(data.gameLength);
+      if (data.gameLength) setGameLength(data.gameLength);
+      if (typeof data.isPublic === 'boolean') setIsPublic(data.isPublic);
     });
 
     socket.on('game_started', (data) => {
@@ -129,6 +171,10 @@ function App() {
       setIsSpyGuessing(false);
     });
 
+    socket.on('public_rooms_list', (rooms) => {
+      setPublicRooms(rooms);
+    });
+
     socket.on('error', (msg) => {
       setError(msg);
     });
@@ -145,13 +191,25 @@ function App() {
       socket.off('spy_guess_phase');
       socket.off('game_over');
       socket.off('room_reset');
+      socket.off('public_rooms_list');
       socket.off('error');
     };
   }, []);
 
   const createRoom = () => {
     if (!playerName) return setError('กรุณาใส่ชื่อ');
-    socket.emit('create_room', playerName);
+    // Default to private (isPublic: false)
+    socket.emit('create_room', { playerName, isPublic: false });
+  };
+
+  const fetchPublicRooms = () => {
+    socket.emit('get_public_rooms');
+    setView('server_list');
+  };
+
+  const joinPublicRoom = (id) => {
+    if (!playerName) return setError('กรุณาใส่ชื่อก่อนเข้าร่วม');
+    socket.emit('join_room', { roomId: id, playerName });
   };
 
   const joinRoom = () => {
@@ -162,6 +220,11 @@ function App() {
   const updateGameLength = (length) => {
     if (!isHost) return;
     socket.emit('update_game_settings', { roomId, gameLength: length });
+  };
+
+  const togglePrivacy = (publicStatus) => {
+    if (!isHost) return;
+    socket.emit('update_game_settings', { roomId, isPublic: publicStatus });
   };
 
   const startGame = () => {
@@ -183,6 +246,8 @@ function App() {
   };
 
   const leaveGame = () => {
+    localStorage.removeItem('spyfall_roomId');
+    localStorage.removeItem('spyfall_playerName');
     setView('home');
     setRoomId('');
     setPlayers([]);
@@ -230,6 +295,10 @@ function App() {
                   </div>
                 </div>
 
+                <div className="flex items-center justify-center gap-4 mb-4">
+                  {/* Privacy toggle removed from here */}
+                </div>
+
                 <Button onClick={createRoom} className="w-full">สร้างห้อง</Button>
 
                 <div className="relative my-4">
@@ -248,11 +317,78 @@ function App() {
                     onChange={(e) => setRoomId(e.target.value.toUpperCase())}
                     className="text-center tracking-widest uppercase font-mono"
                   />
-                  <Button onClick={joinRoom} variant="secondary">เข้าร่วม</Button>
+                  <Button
+                    onClick={joinRoom}
+                    variant="secondary"
+                    className={roomId ? "bg-rose-500 hover:bg-rose-600 text-white" : ""}
+                  >
+                    เข้าร่วม
+                  </Button>
+                </div>
+
+                <div className="mt-4">
+                  <Button onClick={fetchPublicRooms} variant="outline" className="w-full border-slate-700 hover:bg-slate-800">
+                    🔍 ค้นหาห้อง (Server Browser)
+                  </Button>
                 </div>
 
                 {error && <p className="text-rose-500 text-center text-sm">{error}</p>}
               </Card>
+            </motion.div>
+          )}
+
+          {view === 'server_list' && (
+            <motion.div
+              key="server_list"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="text-center mb-6">
+                <h2 className="text-3xl font-bold text-white">ค้นหาห้อง</h2>
+                <p className="text-slate-400">เลือกห้องที่ต้องการเข้าร่วม</p>
+              </div>
+
+              <Card className="space-y-4">
+                <Input
+                  placeholder="ชื่อของคุณ"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                />
+
+                <div className="max-h-[50vh] overflow-y-auto space-y-3 pr-2">
+                  {publicRooms.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500">
+                      ไม่พบห้องสาธารณะในขณะนี้
+                    </div>
+                  ) : (
+                    publicRooms.map((room) => (
+                      <div key={room.roomId} className="bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center">
+                        <div>
+                          <div className="font-bold text-lg text-rose-500 tracking-widest">{room.roomId}</div>
+                          <div className="text-sm text-slate-400">Host: {room.hostName}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm text-slate-300 mb-2">ผู้เล่น: {room.playerCount} คน</div>
+                          <Button
+                            onClick={() => joinPublicRoom(room.roomId)}
+                            className="text-sm py-1 px-3"
+                          >
+                            เข้าร่วม
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {error && <p className="text-rose-500 text-center text-sm">{error}</p>}
+              </Card>
+
+              <Button onClick={() => setView('home')} variant="secondary" className="w-full">
+                กลับหน้าหลัก
+              </Button>
             </motion.div>
           )}
 
@@ -291,7 +427,35 @@ function App() {
               </Card>
 
               <Card>
-                <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">เวลาเล่น (นาที)</h3>
+                <h3 className="text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">ตั้งค่าห้อง</h3>
+
+                <div className="mb-4">
+                  <div className="text-xs text-slate-500 mb-2">สถานะห้อง</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => togglePrivacy(false)}
+                      disabled={!isHost}
+                      className={`flex-1 py-2 rounded-lg border transition-all text-sm font-bold ${!isPublic
+                        ? 'bg-rose-500/20 border-rose-500 text-rose-400'
+                        : 'bg-slate-800 border-slate-700 text-slate-500'
+                        } ${!isHost && 'cursor-default opacity-80'}`}
+                    >
+                      🔒 ส่วนตัว (Private)
+                    </button>
+                    <button
+                      onClick={() => togglePrivacy(true)}
+                      disabled={!isHost}
+                      className={`flex-1 py-2 rounded-lg border transition-all text-sm font-bold ${isPublic
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
+                        : 'bg-slate-800 border-slate-700 text-slate-500'
+                        } ${!isHost && 'cursor-default opacity-80'}`}
+                    >
+                      🌍 สาธารณะ (Public)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-500 mb-2">เวลาเล่น (นาที)</div>
                 <div className="flex gap-2 justify-center">
                   {[3, 5, 8, 10].map(time => (
                     <button
@@ -318,6 +482,10 @@ function App() {
                   รอหัวหน้าห้องเริ่มเกม...
                 </div>
               )}
+
+              <Button onClick={leaveGame} variant="outline" className="w-full border-slate-700 hover:bg-slate-800 text-slate-400">
+                ออกจากห้อง
+              </Button>
             </motion.div>
           )}
 
@@ -526,6 +694,7 @@ function App() {
               </Button>
             </motion.div>
           )}
+
         </AnimatePresence>
       </div>
     </div>

@@ -69,8 +69,11 @@ function getPublicPlayerList(players) {
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    socket.on('create_room', (playerName) => {
+    socket.on('create_room', ({ playerName, isPublic }) => {
         const roomId = generateRoomId();
+        // Default to private if not specified
+        const publicRoom = typeof isPublic === 'boolean' ? isPublic : false;
+
         rooms.set(roomId, {
             id: roomId,
             players: [{ id: socket.id, name: playerName, isHost: true, connected: true }],
@@ -80,10 +83,17 @@ io.on('connection', (socket) => {
             startTime: null,
             votes: {}, // voterId -> suspectId
             spyId: null,
-            timer: null
+            timer: null,
+            isPublic: publicRoom
         });
         socket.join(roomId);
-        socket.emit('room_joined', { roomId, players: getPublicPlayerList(rooms.get(roomId).players), isHost: true, gameLength: 5 });
+        socket.emit('room_joined', {
+            roomId,
+            players: getPublicPlayerList(rooms.get(roomId).players),
+            isHost: true,
+            gameLength: 5,
+            isPublic: publicRoom
+        });
         console.log(`Room ${roomId} created by ${playerName}`);
     });
 
@@ -97,13 +107,35 @@ io.on('connection', (socket) => {
         // Check for reconnection
         const existingPlayer = room.players.find(p => p.name === playerName);
         if (existingPlayer) {
-            if (existingPlayer.connected) {
-                socket.emit('error', 'ชื่อนี้มีคนใช้แล้วในห้องนี้');
-                return;
-            }
+            // Allow reconnection / session reclamation even if "connected" is true.
+            // This handles cases where the user switches apps/tabs and the old socket hasn't timed out yet.
+
+            // if (existingPlayer.connected) {
+            //     socket.emit('error', 'ชื่อนี้มีคนใช้แล้วในห้องนี้');
+            //     return;
+            // }
 
             // Reconnect logic
             console.log(`Player ${playerName} reconnecting to room ${roomId}`);
+
+            // Update spyId if necessary
+            if (room.spyId === existingPlayer.id) {
+                room.spyId = socket.id;
+            }
+
+            // Update votes (both from the player and against the player)
+            // 1. Update votes cast BY this player
+            if (room.votes[existingPlayer.id]) {
+                room.votes[socket.id] = room.votes[existingPlayer.id];
+                delete room.votes[existingPlayer.id];
+            }
+            // 2. Update votes cast AGAINST this player
+            for (const [voterId, suspectId] of Object.entries(room.votes)) {
+                if (suspectId === existingPlayer.id) {
+                    room.votes[voterId] = socket.id;
+                }
+            }
+
             existingPlayer.id = socket.id;
             existingPlayer.connected = true;
             if (existingPlayer.disconnectTimeout) {
@@ -119,6 +151,7 @@ io.on('connection', (socket) => {
                 players: getPublicPlayerList(room.players),
                 isHost: existingPlayer.isHost,
                 gameLength: room.gameLength,
+                isPublic: room.isPublic,
                 // If game is in progress, send game data
                 gameState: room.status === 'waiting' ? null : {
                     status: room.status,
@@ -127,21 +160,15 @@ io.on('connection', (socket) => {
                     isSpy: existingPlayer.id === room.spyId,
                     startTime: room.startTime,
                     gameLength: room.gameLength * 60,
+                    remainingTime: room.startTime ? Math.max(0, Math.floor((room.gameLength * 60) - ((Date.now() - room.startTime) / 1000))) : room.gameLength * 60,
                     allLocations: locations.map(l => l.name)
                 }
             });
 
             // If game is running, we need to re-send game_started data properly.
             if (room.status !== 'waiting') {
-                const isSpy = existingPlayer.id === room.spyId;
-                socket.emit('game_started', {
-                    location: isSpy ? '???' : room.location.name,
-                    role: existingPlayer.role,
-                    isSpy: isSpy,
-                    gameLength: room.gameLength * 60,
-                    allLocations: locations.map(l => l.name),
-                    startTime: room.startTime
-                });
+                // We don't need to emit game_started here because room_joined already contains gameState
+                // and emitting it again might reset client state (like timer).
 
                 if (room.status === 'voting') socket.emit('start_voting');
                 if (room.status === 'guessing') socket.emit('spy_guess_phase');
@@ -160,18 +187,29 @@ io.on('connection', (socket) => {
         socket.join(roomId);
 
         io.to(roomId).emit('player_update', getPublicPlayerList(room.players));
-        socket.emit('room_joined', { roomId, players: getPublicPlayerList(room.players), isHost: false, gameLength: room.gameLength });
+        socket.emit('room_joined', {
+            roomId,
+            players: getPublicPlayerList(room.players),
+            isHost: false,
+            gameLength: room.gameLength,
+            isPublic: room.isPublic
+        });
         console.log(`${playerName} joined room ${roomId}`);
     });
 
-    socket.on('update_game_settings', ({ roomId, gameLength }) => {
+    socket.on('update_game_settings', ({ roomId, gameLength, isPublic }) => {
         const room = rooms.get(roomId);
         if (!room) return;
         const player = room.players.find(p => p.id === socket.id);
         if (!player || !player.isHost) return;
 
-        room.gameLength = gameLength;
-        io.to(roomId).emit('game_settings_updated', { gameLength });
+        if (gameLength) room.gameLength = gameLength;
+        if (typeof isPublic === 'boolean') room.isPublic = isPublic;
+
+        io.to(roomId).emit('game_settings_updated', {
+            gameLength: room.gameLength,
+            isPublic: room.isPublic
+        });
     });
 
     socket.on('start_game', (roomId) => {
@@ -300,6 +338,22 @@ io.on('connection', (socket) => {
 
         io.to(roomId).emit('room_reset');
         io.to(roomId).emit('player_update', getPublicPlayerList(room.players));
+    });
+
+    socket.on('get_public_rooms', () => {
+        const publicRooms = [];
+        rooms.forEach((room) => {
+            if (room.isPublic && room.status === 'waiting') {
+                const host = room.players.find(p => p.isHost);
+                publicRooms.push({
+                    roomId: room.id,
+                    hostName: host ? host.name : 'Unknown',
+                    playerCount: room.players.length,
+                    status: room.status
+                });
+            }
+        });
+        socket.emit('public_rooms_list', publicRooms);
     });
 
     socket.on('disconnect', () => {
